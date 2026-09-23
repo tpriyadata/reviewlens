@@ -1,4 +1,4 @@
-﻿annotated-types==0.8.0
+annotated-types==0.8.0
 azure-ai-textanalytics==5.4.0
 azure-common==1.1.28
 azure-core==1.41.0
