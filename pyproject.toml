@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reviewlens"
+version = "0.1.0"
+description = "Customer-review analysis pipeline on Azure AI Language"
+requires-python = ">=3.10"
+dependencies = [
+    "azure-ai-textanalytics>=5.3,<6",
+    "python-dotenv>=1.0",
+    "pydantic>=2.5,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
