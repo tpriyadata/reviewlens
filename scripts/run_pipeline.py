@@ -13,6 +13,7 @@ from pathlib import Path
 
 from azure.core.exceptions import ClientAuthenticationError
 
+from reviewlens.audit import run_checks, to_csv, to_markdown
 from reviewlens.client import ConfigError, build_client
 from reviewlens.pipeline import ReviewPipeline
 from reviewlens.report import summarize
@@ -62,11 +63,21 @@ def main() -> int:
             f.write(r.model_dump_json() + "\n")
 
     summary = summarize(results)
-    (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    summary_path = args.out_dir / "summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    # Reverse check: re-read what was actually written and reconcile it against the input.
+    written = {p.name: p.read_text(encoding="utf-8") for p in (results_path, summary_path)}
+    checks = run_checks(reviews, results, summary, written)
+    (args.out_dir / "audit.md").write_text(to_markdown(results, checks), encoding="utf-8")
+    (args.out_dir / "audit.csv").write_text(to_csv(results), encoding="utf-8")
 
     print(json.dumps(summary, indent=2))
-    print(f"\nwrote {results_path} and {args.out_dir / 'summary.json'}")
-    return 0
+    print("\nAudit:")
+    for c in checks:
+        print(f"  [{'PASS' if c.passed else 'FAIL'}] {c.name}")
+    print(f"\nwrote results.jsonl, summary.json, audit.md, audit.csv to {args.out_dir}")
+    return 0 if all(c.passed for c in checks) else 1
 
 
 if __name__ == "__main__":
