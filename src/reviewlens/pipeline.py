@@ -9,6 +9,9 @@ Design rules:
   and one failed batch never fails the run. The exception is authentication, which aborts.
 - The three analysis stages run independently on the redacted text, so a sentiment
   failure does not cost you key phrases or entities.
+- Redaction is done locally from the service's entity offsets, so we control which
+  categories count as personal data (PersonType - roles like "customer support" - does not).
+  Every character we mask must also be masked by the service; any disagreement fails closed.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ from azure.core.exceptions import (
 
 from .batching import MAX_DOCS_PER_REQUEST, STAGE_BATCH_LIMITS, chunked, truncate
 from .models import Assessment, AspectOpinion, Entity, ReviewResult
+from .redaction import DEFAULT_IGNORED_PII, mask_spans
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +55,7 @@ class ReviewPipeline:
         allowed_languages: Iterable[str] = ("en",),
         batch_size: int = MAX_DOCS_PER_REQUEST,
         min_entity_confidence: float = 0.6,
+        pii_ignore_categories: Iterable[str] = DEFAULT_IGNORED_PII,
     ) -> None:
         if not 1 <= batch_size <= MAX_DOCS_PER_REQUEST:
             raise ValueError(f"batch_size must be 1..{MAX_DOCS_PER_REQUEST}")
@@ -58,6 +63,7 @@ class ReviewPipeline:
         self.allowed_languages = frozenset(allowed_languages)
         self.batch_size = batch_size
         self.min_entity_confidence = min_entity_confidence
+        self.pii_ignore_categories = frozenset(pii_ignore_categories)
 
     # ------------------------------------------------------------------ public
     def run(self, reviews: Iterable[tuple[str, str]]) -> list[ReviewResult]:
@@ -177,14 +183,20 @@ class ReviewPipeline:
         if lang not in self.allowed_languages:
             result.skipped_reason = f"language '{lang or 'unknown'}' not in allowed set"
 
-    @staticmethod
-    def _make_apply_pii(texts: dict[str, str]) -> StageApply:
+    def _make_apply_pii(self, texts: dict[str, str]) -> StageApply:
         def apply(doc, result: ReviewResult) -> None:
-            if doc.redacted_text is None:
-                raise ValueError("no redacted_text returned")
-            result.redacted_text = doc.redacted_text
-            result.pii_categories = sorted({str(e.category) for e in doc.entities})
-            texts[doc.id] = doc.redacted_text  # downstream stages only ever see redacted text
+            raw = texts[doc.id]
+            service = doc.redacted_text
+            if service is None or len(service) != len(raw):
+                raise ValueError("service redaction missing or not aligned with input")
+            kept = [e for e in doc.entities if str(e.category) not in self.pii_ignore_categories]
+            redacted = mask_spans(raw, [(e.offset, e.length) for e in kept])
+            # Cross-check: anything we mask, the service must have masked too.
+            if any(r == "*" and raw[i] != "*" and service[i] != "*" for i, r in enumerate(redacted)):
+                raise ValueError("local redaction disagrees with service redaction")
+            result.redacted_text = redacted
+            result.pii_categories = sorted({str(e.category) for e in kept})
+            texts[doc.id] = redacted  # downstream stages only ever see redacted text
         return apply
 
     @staticmethod

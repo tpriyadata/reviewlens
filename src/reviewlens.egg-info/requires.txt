@@ -1,6 +1,0 @@
-azure-ai-textanalytics<6,>=5.3
-python-dotenv>=1.0
-pydantic<3,>=2.5
-
-[dev]
-pytest>=8

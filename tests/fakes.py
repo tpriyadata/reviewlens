@@ -22,6 +22,7 @@ from azure.ai.textanalytics import (
 )
 
 EMAIL = re.compile(r"\S+@\S+")
+ROLE = re.compile(r"Customer support")
 
 
 def _err(doc_id: str) -> DocumentError:
@@ -30,7 +31,9 @@ def _err(doc_id: str) -> DocumentError:
 
 
 class FakeClient:
-    def __init__(self, fail_ids: dict[str, set[str]] | None = None, raise_on: dict | None = None):
+    def __init__(self, fail_ids: dict[str, set[str]] | None = None, raise_on: dict | None = None,
+                 pii_mode: str = "normal"):
+        self.pii_mode = pii_mode         # normal | bad_offset | service_unmasked
         self.calls: list[tuple[str, list[dict]]] = []
         self.fail_ids = fail_ids or {}   # stage -> ids that return DocumentError
         self.raise_on = raise_on or {}   # stage -> exception raised for the whole batch
@@ -60,9 +63,17 @@ class FakeClient:
         for d in docs:
             if self._bad("pii", d["id"]):
                 out.append(_err(d["id"])); continue
-            ents = [PiiEntity(text=m.group(), category="Email", confidence_score=0.9)
-                    for m in EMAIL.finditer(d["text"])]
-            redacted = EMAIL.sub(lambda m: "*" * len(m.group()), d["text"])
+            text = d["text"]
+            ents = [PiiEntity(text=m.group(), category=cat, confidence_score=0.9,
+                              offset=m.start(), length=len(m.group()))
+                    for rx, cat in ((EMAIL, "Email"), (ROLE, "PersonType")) for m in rx.finditer(text)]
+            redacted = text
+            for e in ents:  # like the real service: masks every detected entity, char for char
+                redacted = redacted[:e.offset] + "*" * e.length + redacted[e.offset + e.length:]
+            if self.pii_mode == "bad_offset" and ents:
+                ents[0].offset = len(text) + 5
+            if self.pii_mode == "service_unmasked":
+                redacted = text
             out.append(RecognizePiiEntitiesResult(id=d["id"], is_error=False, entities=ents,
                                                   redacted_text=redacted))
         return out
